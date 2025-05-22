@@ -4,35 +4,35 @@
 #include <Arduino.h>
 #include "config.h"
 
-// Configuração dos pinos
-#define TOUCH_PIN 4
-#define MOTOR_RACAO_PIN 15
-#define MOTOR_PORTA_PIN1 2 // Ponte H: lado 1 do motor da porta
-#define MOTOR_PORTA_PIN2 5 // Ponte H: lado 2 do motor da porta
-#define SENSOR_ABRIR_PIN 25 // Fim de curso para abertura 
-#define SENSOR_FECHAR_PIN 26 // Fim de curso para fechamento 
-#define LED 32//LED AWS
+// ==================== Configuração dos pinos ====================
+#define TOUCH_PIN 4              // Pino do sensor de toque
+#define MOTOR_RACAO_PIN 15       // Pino do motor de liberação da ração
+#define MOTOR_PORTA_PIN1 2       // Pino 1 do motor da porta (ponte H)
+#define MOTOR_PORTA_PIN2 5       // Pino 2 do motor da porta (ponte H)
+#define SENSOR_ABRIR_PIN 25      // Sensor de fim de curso indicando porta aberta
+#define SENSOR_FECHAR_PIN 26     // Sensor de fim de curso indicando porta fechada
+#define LED 32                   // LED indicador (pode ser usado para status)
 
+// ==================== Parâmetros de controle ====================
+int delayTime = 2000;     // Tempo que o motor da ração ficará ligado (em ms)
+int retryDelay = 1500;    // Tempo máximo para abrir/fechar a porta antes de tentar novamente
+int maxRetries = 3;       // Máximo de tentativas ao abrir/fechar a porta
 
-int delayTime = 2000; // Tempo padrão para liberar ração
-int retryDelay = 1500; // Tempo máximo para tentar abrir/fechar a porta
-int maxRetries = 3;    // Número máximo de tentativas recursivas
+// ==================== Prototipação das funções ====================
+void liberarDose();                   // Libera uma porção de ração
+bool abrirPorta(int tentativa);       // Abre a porta com controle de tentativas
+bool fecharPorta(int tentativa);      // Fecha a porta com controle de tentativas
+void pararMotor();                    // Para os motores da porta
 
-void liberarDose();
-bool abrirPorta(int tentativa);
-bool fecharPorta(int tentativa);
-void pararMotor();
+// ==================== Variáveis de estado ====================
+String status = "OK";     // Status do sistema (pode ser atualizado conforme falhas ou eventos)
+int nivelRacao = 78;      // Nível simulado da ração (%)
 
-
-// Estado atual
-String status = "OK";
-int nivelRacao = 78; // valor simulado
-
-// ===== Função de Callback do MQTT =====
+// ==================== Função Callback do MQTT ====================
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String msg = "";
   for (int i = 0; i < length; i++) {
-    msg += (char)payload[i];
+    msg += (char)payload[i];  // Converte payload em string
   }
 
   Serial.print("Mensagem recebida em ");
@@ -40,13 +40,13 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
   Serial.print(": ");
   Serial.println(msg);
 
+  // Verifica se o comando é para liberar uma dose de ração
   if (msg == "liberarDose") {
     liberarDose();
   }
 }
 
-
-// ===== Publicar dados =====
+// ==================== Publicar dados via MQTT ====================
 void publishData() {
   String payload = "{";
   payload += "\"status\":\"" + status + "\",";
@@ -57,18 +57,20 @@ void publishData() {
   Serial.println("Publicado: " + payload);
 }
 
+// ==================== Liberação de ração ====================
 void liberarDose() {
-  digitalWrite(2,HIGH);
+  digitalWrite(2, HIGH); // Ativa LED indicador (ou outro sinal)
+
   if (abrirPorta(0)) {
-    delay(1000);  // Aguarda antes de liberar a ração
+    delay(1000); // Espera um pouco antes de liberar
 
     Serial.println("Liberando dose de ração...");
-    digitalWrite(MOTOR_RACAO_PIN, HIGH);  // Ativa motor da ração
-    delay(delayTime);                     // Tempo para liberar ração
-    digitalWrite(MOTOR_RACAO_PIN, LOW);   // Desativa motor da ração
+    digitalWrite(MOTOR_RACAO_PIN, HIGH);  // Liga motor
+    delay(delayTime);                     // Tempo de operação
+    digitalWrite(MOTOR_RACAO_PIN, LOW);   // Desliga motor
     Serial.println("Dose liberada.");
 
-    delay(1000);  // Aguarda antes de fechar a porta
+    delay(1000); // Espera antes de fechar a porta
 
     if (!fecharPorta(0)) {
       Serial.println("Erro ao fechar a porta!");
@@ -76,17 +78,18 @@ void liberarDose() {
   } else {
     Serial.println("Erro ao abrir a porta!");
   }
-    digitalWrite(2,LOW);
+
+  digitalWrite(2, LOW); // Desliga LED indicador
 }
 
-
+// ==================== Abertura da porta ====================
 bool abrirPorta(int tentativa) {
   if (tentativa >= maxRetries) {
     Serial.println("Limite de tentativas para abrir a porta atingido.");
-    return false; // Retorna falha após atingir o limite de tentativas
+    return false;
   }
 
-  // Se a porta já estiver aberta, não faz nada
+  // Se já estiver aberta, retorna sucesso
   if (digitalRead(SENSOR_ABRIR_PIN) == LOW) {
     Serial.println("Porta já está aberta.");
     return true;
@@ -99,19 +102,18 @@ bool abrirPorta(int tentativa) {
     digitalWrite(MOTOR_PORTA_PIN1, HIGH);
     digitalWrite(MOTOR_PORTA_PIN2, LOW);
 
-    // Verifica timeout
     if (millis() - startTime > retryDelay) {
       Serial.println("Timeout ao tentar abrir a porta.");
       pararMotor();
       delay(500);
-      
-      // Pequeno recuo antes de tentar novamente
+
+      // Recuo para evitar travamento
       digitalWrite(MOTOR_PORTA_PIN1, LOW);
       digitalWrite(MOTOR_PORTA_PIN2, HIGH);
       delay(200);
       pararMotor();
 
-      return abrirPorta(tentativa + 1); // Chama recursivamente
+      return abrirPorta(tentativa + 1); // Tenta novamente
     }
   }
 
@@ -120,13 +122,14 @@ bool abrirPorta(int tentativa) {
   return true;
 }
 
+// ==================== Fechamento da porta ====================
 bool fecharPorta(int tentativa) {
   if (tentativa >= maxRetries) {
     Serial.println("Limite de tentativas para fechar a porta atingido.");
     return false;
   }
 
-  // Se a porta já estiver fechada, não faz nada
+  // Se já estiver fechada, retorna sucesso
   if (digitalRead(SENSOR_FECHAR_PIN) == LOW) {
     Serial.println("Porta já está fechada.");
     return true;
@@ -144,7 +147,7 @@ bool fecharPorta(int tentativa) {
       pararMotor();
       delay(500);
 
-      // Pequeno recuo antes de tentar novamente
+      // Recuo antes de nova tentativa
       digitalWrite(MOTOR_PORTA_PIN1, HIGH);
       digitalWrite(MOTOR_PORTA_PIN2, LOW);
       delay(100);
@@ -159,11 +162,10 @@ bool fecharPorta(int tentativa) {
   return true;
 }
 
-// Função para parar o motor
+// ==================== Parar motor da porta ====================
 void pararMotor() {
   digitalWrite(MOTOR_PORTA_PIN1, LOW);
   digitalWrite(MOTOR_PORTA_PIN2, LOW);
 }
-
 
 #endif
